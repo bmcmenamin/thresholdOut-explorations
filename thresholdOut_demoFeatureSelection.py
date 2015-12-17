@@ -76,7 +76,7 @@ def thresholdout(trParam, hoParam, scale):
     return newHoParam
 
 
-def getCoeffs(data):
+def getCoeffs(data, model):
     coeff = model.fit(data[0], data[1]).coef_.ravel()
     return coeff
 
@@ -109,8 +109,8 @@ def runClassifier(n, d, krange, nullData=False):
         model = LinearRegression()
 
     # Get feature coefficients for training, holdout (actual), and holdout (with THO)
-    trainCoeff = getCoeffs(dataset[0])
-    holdoutCoeff = getCoeffs(dataset[1])
+    trainCoeff = getCoeffs(dataset[0], model)
+    holdoutCoeff = getCoeffs(dataset[1], model)
     holdoutCoeff_tho = thresholdout(trainCoeff, holdoutCoeff, 1.0)
 
     # Use an 'adaptive' approach to finding strong features
@@ -125,7 +125,7 @@ def runClassifier(n, d, krange, nullData=False):
     vals = [getModelPerf(featureRank[:k], dataset, model) for k in krange]
     vals_tho = [getModelPerf(featureRank_tho[:k], dataset, model) for k in krange]
     # for v in vals_tho:
-    #    v[1] = thresholdout(v[0], v[1], 0.05)
+    #    v[1] = thresholdout(v[0], v[1], 0.02)
 
     return vals, vals_tho
 
@@ -214,7 +214,7 @@ Note: The benefits of thresholdOut become clearer as 'd' gets bigger
 """
 
 reps = 2
-n, d = 1000, 10000
+n, d = 1000, 5000
 krange = list(range(0, 40, 2))
 
 isClsf = True
