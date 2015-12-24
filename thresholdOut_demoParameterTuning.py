@@ -1,6 +1,5 @@
 """
 
-
 This original paper from Dwork et al use feature selection to show off how well
 thresholdout works. However, that's not a very useful application for big models
 for two reasons:
@@ -13,6 +12,8 @@ for two reasons:
     b) It's difficult to measure feature importance in fancy models (ensemble methods
        of nonlinear models), so you won't be able to do the same feature selection.
 
+So here, we show how to use thresholdout in a parameter-tuning grid search that won't
+overfit your models
 """
 
 
@@ -28,13 +29,13 @@ from sklearn.svm import SVC
 from sklearn.datasets import make_classification
 
 
-def createDataset(n, nPC):
-    dim = int(np.log2(2 * nPC))
-    X, Y = make_classification(n_samples=3 * n, n_classes=2,
-                               n_clusters_per_class=nPC,
-                               n_redundant=0, n_repeated=0,
-                               n_features=4 * dim, n_informative=dim,
-                               flip_y=0.0, class_sep=1.0)
+def createDataset(n, nPC, sd=1.0):
+    centers = np.random.rand(1, 3, nPC * 2)
+    tmpRand = np.random.randn((3 * n) // (nPC * 2), 3, nPC * 2) * sd
+    X = tmpRand + centers
+    Y = np.dstack([np.zeros((X.shape[0], 1, nPC)), np.ones((X.shape[0], 1, nPC))])
+    X = X.reshape(-1, 3, order='F')
+    Y = Y.reshape(-1, order='F')
     X_train = X[0::3, :]
     Y_train = Y[0::3]
     X_holdout = X[1::3, :]
@@ -44,15 +45,7 @@ def createDataset(n, nPC):
     return [[X_train, Y_train], [X_holdout, Y_holdout], [X_test, Y_test]]
 
 
-def createDataset_noSignal(n, nPC):
-    dataset = createDataset(n, nPC)
-    for d in dataset:
-        np.random.shuffle(d[1])
-    return dataset
-
-
 def thresholdout(trParam, hoParam, scale):
-
     thr = scale
     tol = thr / 4
 
@@ -66,51 +59,62 @@ def thresholdout(trParam, hoParam, scale):
     return newHoParam
 
 
-def getBestGamma(data, model):
+def getBestGamma(data, model, krange, gammaRange):
     bestGamma = 0.0
+    bestC = 0.0
+    bestGamma_tho = 0.0
+    bestC_tho = 0.0
     bestAccy = -1.0
-    for g in gammaList:
-        model.set_params(gamma=g)
-        model = model.fit(data[0][0], data[0][1])
-        currAccy = model.score(data[1][0], data[1][1])
-        if currAccy > bestAccy:
-            bestAccy = currAccy
-            bestGamma = g
-    return bestGamma
+    bestAccy_tho = -1.0
+    for g in gammaRange:
+        for k in krange:
+            model.set_params(C=k, gamma=g)
+            model = model.fit(data[0][0], data[0][1])
+            trAccy = model.score(data[0][0], data[0][1])
+            currAccy = model.score(data[1][0], data[1][1])
+            if currAccy > bestAccy:
+                bestAccy = currAccy
+                bestGamma = g
+                bestC = k
+            currAccy_tho = thresholdout(trAccy, currAccy, SCALE)
+            if currAccy_tho > bestAccy_tho:
+                bestAccy_tho = currAccy_tho
+                bestGamma_tho = g
+                bestC_tho = k
+    return bestC, bestGamma, bestC_tho, bestGamma_tho
 
 
-def getModelPerf(data, model):
-    model.set_params(gamma=getBestGamma(data, model))
+def getModelPerf(data, model, krange, gammaRange):
+    bestParam = getBestGamma(data, model, krange, gammaRange)
+    model.set_params(C=bestParam[0], gamma=bestParam[1])
     model = model.fit(data[0][0], data[0][1])
     scores = [model.score(d[0], d[1]) for d in data]
-    return scores
+
+    model.set_params(C=bestParam[2], gamma=bestParam[3])
+    model = model.fit(data[0][0], data[0][1])
+    scores_tho = [model.score(d[0], d[1]) for d in data]
+    return scores, scores_tho
 
 
-def runClassifier(n, nPC, krange, nullData=False):
+def runClassifier(n, nPC, krange, gammaRange, nullData=False):
 
+    dataset = createDataset(n, nPC, SIG_SD)
     if nullData:
-        dataset = createDataset_noSignal(n, nPC)
-    else:
-        dataset = createDataset(n, nPC)
+        for d in dataset:
+            np.random.shuffle(d[1])
 
     model = SVC(C=1.0, kernel='rbf', gamma=0.5)
 
-    # Get performance as a function of # of retained features
+    # Get performance as a function of free parameters
     vals = []
     vals_tho = []
-    for k in krange:
-        model.set_params(C=k)
-        perf = getModelPerf(dataset, model)
-        perf_tho = [perf[0],
-                    thresholdout(perf[0], perf[1], 0.05),
-                    perf[2]]
-        vals.append(perf)
-        vals_tho.append(perf_tho)
-
+    perf, perf_tho = getModelPerf(dataset, model, krange, gammaRange)
+    vals.append(perf)
+    vals_tho.append(perf_tho)
     return vals, vals_tho
 
 
-def repeatexp(n, d, krange, reps, noSignal):
+def repeatexp(n, d, krange, gammaRange, reps, noSignal):
     """
     Repeat the experiment multiple times on different
     datasets to put errorbars on the graphs
@@ -121,13 +125,12 @@ def repeatexp(n, d, krange, reps, noSignal):
     valDataframe_tho = pd.DataFrame(data=[], columns=colList)
     for perm in range(reps):
         print("Repetition: {}".format(perm + 1))
-        vals_std, vals_tho = runClassifier(n, d, krange, nullData=noSignal)
+        vals_std, vals_tho = runClassifier(n, d, krange, gammaRange, nullData=noSignal)
         tmpNew_std = []
         tmpNew_tho = []
         for i, cond in enumerate(condList):
-            for j, paramVal in enumerate(krange):
-                tmpNew_std.append([perm, paramVal, vals_std[j][i], cond])
-                tmpNew_tho.append([perm, paramVal, vals_tho[j][i], cond])
+            tmpNew_std.append([perm, 0, vals_std[0][i], cond])
+            tmpNew_tho.append([perm, 0, vals_tho[0][i], cond])
         tmpNew_std = pd.DataFrame(tmpNew_std, columns=colList)
         tmpNew_tho = pd.DataFrame(tmpNew_tho, columns=colList)
         valDataframe_std = pd.concat([valDataframe_std, tmpNew_std], axis=0)
@@ -141,44 +144,36 @@ def runandplotsummary(n, d, krange, reps):
     """
 
     print('Running on data WITH signal')
-    df_std, df_tho = repeatexp(n, d, krange, reps, False)
+    df_std, df_tho = repeatexp(n, d, krange, gammaRange, reps, False)
 
     print('Running on data WITHOUT signal')
-    df_std_ns, df_tho_ns = repeatexp(n, d, krange, reps, True)
+    df_std_ns, df_tho_ns = repeatexp(n, d, krange, gammaRange, reps, True)
 
     f, axes = plt.subplots(2, 2)
     sb.set_style('whitegrid')
 
-    sb.tsplot(data=df_std,
-              time='paramVal',
-              unit='perm',
-              condition='dset',
-              value='perf',
-              ax=axes[0][0])
+    sb.barplot(data=df_std,
+               x='dset',
+               y='perf',
+               ax=axes[0][0])
     axes[0][0].set_title('Standard, HAS Signal')
 
-    sb.tsplot(data=df_tho,
-              time='paramVal',
-              unit='perm',
-              condition='dset',
-              value='perf',
-              ax=axes[0][1])
+    sb.barplot(data=df_tho,
+               x='dset',
+               y='perf',
+               ax=axes[0][1])
     axes[0][1].set_title('Thresholdout, HAS Signal')
 
-    sb.tsplot(data=df_std_ns,
-              time='paramVal',
-              unit='perm',
-              condition='dset',
-              value='perf',
-              ax=axes[1][0])
+    sb.barplot(data=df_std_ns,
+               x='dset',
+               y='perf',
+               ax=axes[1][0])
     axes[1][0].set_title('Standard, NO Signal')
 
-    sb.tsplot(data=df_tho_ns,
-              time='paramVal',
-              unit='perm',
-              condition='dset',
-              value='perf',
-              ax=axes[1][1])
+    sb.barplot(data=df_tho_ns,
+               x='dset',
+               y='perf',
+               ax=axes[1][1])
     axes[1][1].set_title('Thresholdout, NO Signal')
 
 
@@ -189,18 +184,26 @@ def runandplotsummary(n, d, krange, reps):
 
 """
 These two experiments will demonstrate how the use of thresholdout allows for
-adaptive paramge tuning without overfitting to the trianing data.
+adaptive parameter tuning in a grid search without overfitting to the trianing data.
 
 num_per_condition is the number of clusters in each condition
-krange is the range of 'gamma' parameters for a RBF SVM
+gammaRange is the range of 'gamma' parameters for a RBF SVM
+krange is the range of soft-margin regularization parameters for the SVM, (e.g., C)
+
+NOTE: if you have too much data realtive to the complexity of the problem, the
+grid search won't overfit because the training and holdout data are each complete
+enough to build the same models of the problem.
+
 """
 
-reps = 2
-n, num_per_condition = 500, 4
+reps = 100
+n, num_per_condition = 50, 2
 
-gammaList = np.linspace(0, 4.0, 50 + 1)[1:]
-krange    = np.linspace(0, 1.0, 20 + 1)[1:]
+gammaRange = np.linspace(0, 4.0, 20 + 1)[1:]
+krange = np.linspace(0, 1.0, 20 + 1)[1:]
 
+SCALE = 0.20
+SIG_SD = 0.5 / np.sqrt(num_per_condition)
 
 plt.close('all')
 runandplotsummary(n, num_per_condition, krange, reps)

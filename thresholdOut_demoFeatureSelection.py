@@ -213,8 +213,8 @@ isClsf=False will demonstrate using multiple regression
 Note: The benefits of thresholdOut become clearer as 'd' gets bigger
 """
 
-reps = 2
-n, d = 1000, 5000
+reps = 20
+n, d = 1000, 10000
 krange = list(range(0, 40, 2))
 
 isClsf = True
