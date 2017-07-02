@@ -1,26 +1,20 @@
-# Experiments for Thresholdhout
-# Fast implementation of Thresholdout specific to the experiment.
-# Thresholdout with threshold = 4/sqrt(n), tolerance = 1/sqrt(n)
-# Signal: 20 variables with 6/sqrt(n) bias toward the label
-
 import numpy as np
-import matplotlib
 import datetime
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-
 
 def createnosignaldata(n, d):
     """
     Data points are random Gaussian vectors.
     Class labels are random and uniform
     """
+    
     X_train = np.random.normal(0, 1, (n, d + 1))
     X_train[:, d] = np.sign(X_train[:, d])
     X_holdout = np.random.normal(0, 1, (n, d + 1))
     X_holdout[:, d] = np.sign(X_holdout[:, d])
     X_test = np.random.normal(0, 1, (n, d + 1))
     X_test[:, d] = np.sign(X_test[:, d])
+    
     return X_train, X_holdout, X_test
 
 
@@ -30,6 +24,7 @@ def createhighsignaldata(n, d):
     Class labels are random and uniform
     First nbiased are biased with bias towards the class label
     """
+    
     X_train = np.random.normal(0, 1, (n, d + 1))
     X_train[:, d] = np.sign(X_train[:, d])
     X_holdout = np.random.normal(0, 1, (n, d + 1))
@@ -52,10 +47,12 @@ def createhighsignaldata(n, d):
 
 
 def runClassifier(n, d, krange, X_train, X_holdout, X_test):
+    
     """
     Variable selection and basic boosting on synthetic data. Variables
     with largest correlation with target are selected first.
     """
+    
     # Compute values on the standard holdout
     tolerance = 1.0 / np.sqrt(n)
     threshold = 4.0 / np.sqrt(n)
@@ -114,102 +111,56 @@ def runClassifier(n, d, krange, X_train, X_holdout, X_test):
         else:
             noisy_vals.append([ftrain, fholdout, ftest])
 
+    vals = np.array(vals)
+    noisy_vals = np.array(noisy_vals)
     return vals, noisy_vals
-
-
-def plot1(x, mean, std, plotname, plottitle, legend_pos=2):
-    fig = plt.figure(1, figsize=(6.5, 4))
-    plt.title(plottitle, fontsize='14')
-    plt.ylabel('accuracy', fontsize='14')
-    plt.xlabel('number of variables', fontsize='14')
-    plt.axis([x[0], x[-1], 0.45, 0.75])
-
-    colorList = ['#B2B2F5', '#CCFFCC', '#FF9848']
-    label = ['training', 'holdout', 'fresh']
-    for i, color in enumerate(colorList):
-        plt.plot(x, mean[:, i],
-                 'b^-', label=label[i])
-        plt.fill_between(x, mean[:, i] - std[:, i], mean[:, i] + std[:, i],
-                         alpha=0.5, edgecolor=color, facecolor=color, linestyle='dashdot')
-
-    plt.legend(loc=legend_pos, prop={'size': 12})
-    plt.tight_layout()
-    plt.savefig(plotname + ".pdf")
-    plt.close()
-
-
-def avgout(vallist):
-    """ entry-wise average of a list of matrices """
-    r = len(vallist)
-    A = 0
-    if r > 0:
-        for B in vallist:
-            A += (1.0 / r) * B
-    return A
-
-
-def stddev(vallist):
-    """ entry-wise standard deviation of a list of matrices """
-    r = len(vallist)
-    mean = avgout(vallist)
-    A = 0
-    if r > 0:
-        for B in vallist:
-            A += (1.0 / r) * (B - mean)**2
-    return np.sqrt(A)
-
 
 def repeatexp(n, d, krange, reps, datafn):
     """ Repeat experiment specified by fn for reps steps """
     vallist = []
-    vallist2 = []
+    vallist_noisy = []
     for r in range(0, reps):
-        print("Repetition: {}".format(r))
+        #print("Repetition: {}".format(r))
         X_train, X_holdout, X_test = datafn(n, d)
-        vals, vals2 = runClassifier(n, d, krange, X_train, X_holdout, X_test)
-        vallist.append(np.array(vals))
-        vallist2.append(np.array(vals2))
-    return vallist, vallist2
+        vals, vals_noisy = runClassifier(n, d, krange, X_train, X_holdout, X_test)
+        vallist.append(vals)
+        vallist_noisy.append(vals_noisy)
+ 
+    vallist = np.dstack(vallist)
+    vallist_noisy = np.dstack(vallist_noisy)
+    
+    return vallist, vallist_noisy
 
 
-def runandplotsummary(n, d, krange, reps, datafn, plotname):
-    vallist, vallist2 = repeatexp(n, d, krange, reps, datafn)
-    mean = avgout(vallist)
-    std = stddev(vallist)
-    mean2 = avgout(vallist2)
-    std2 = stddev(vallist2)
-    f = open(plotname + ".txt", 'w')
-    f.write(str(mean))
-    f.write("\n")
-    f.write(str(std))
-    f.write("\n")
-    f.write(str(mean2))
-    f.write("\n")
-    f.write(str(std2))
-    f.close()
-    plot1(krange, mean, std, plotname + "-std", "Standard holdout")
-    plot1(krange, mean2, std2, plotname + "-thr", "Thresholdout")
+def runandplotsummary(n, d, krange, reps, datafn, condName):
+    
+    vallist_normal, vallist_tout = repeatexp(n, d, krange, reps, datafn)
+    
+    mean_normal = np.mean(vallist_normal, axis=2)
+    std_normal  = np.std(vallist_normal, axis=2)
+    
+    mean_tout = np.mean(vallist_tout, axis=2)
+    std_tout  = np.std(vallist_tout, axis=2)
 
+    ts = datetime.datetime.now().strftime('%Y%m%d%H%M')
+    plotname = "plot-{ts}-{n}-{d}-{reps}-{condition}"
+    plotname = plotname.format(ts=ts, n=n, d=d, reps=reps, condition=condName)
 
+    f, ax = plt.subplots(2, 1, sharex=True)
+    plot1(ax[0], krange, mean_normal, std_normal, plotname + "-std", "Standard holdout")
+    plot1(ax[1], krange, mean_tout,   std_tout,   plotname + "-thr", "Thresholdout")
+    ax[1].set_xlabel('Number of variables', fontsize='8')
+    ax[1].legend(loc=2, prop={'size': 6})    
+ 
+def plot1(a, x, m, sd, plotname, plottitle):
+    
+    a.set_title(plottitle, fontsize='8')
+    a.set_ylabel('Accuracy', fontsize='8')
+    a.axis([x[0], x[-1], 0.45, 0.75])
 
-
-
-
-
-reps = 20
-n, d = 5000, 500
-krange = [0, 10, 20, 30, 45, 70, 100, 150, 200, 250, 300, 400, 500]
-
-today = datetime.datetime.now()
-timestamp = str(today.month) + str(today.day) + "." + str(today.hour) + str(today.minute)
-
-
-# Experiment 1:
-# No correlations
-plotname = "plot-" + timestamp + "-" + str(n) + "-" + str(d) + "-" + str(reps) + "-nosignal"
-runandplotsummary(n, d, krange, reps, createnosignaldata, plotname)
-
-# Experiment 2:
-# Some variables are correlated
-plotname = "plot-" + timestamp + "-" + str(n) + "-" + str(d) + "-" + str(reps) + "-highsignal"
-runandplotsummary(n, d, krange, reps, createhighsignaldata, plotname)
+    colorList = ['#B2B2F5', '#CCFFCC', '#FF9848']
+    label = ['training', 'holdout', 'fresh']
+    for i, color in enumerate(colorList):
+        a.plot(x, m[:, i], c=color, marker='^', label=label[i])
+        a.fill_between(x, m[:, i] - sd[:, i], m[:, i] + sd[:, i],
+                       alpha=0.5, edgecolor=color, facecolor=color, linestyle='dashdot')
